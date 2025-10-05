@@ -1,0 +1,11 @@
+HTTP/1.1 302 Found
+Host: localhost:8080
+Date: Sat, 04 Oct 2025 19:48:53 GMT
+Connection: close
+X-Powered-By: PHP/8.4.12
+Expires: Thu, 19 Nov 1981 08:52:00 GMT
+Pragma: no-cache
+Cache-Control: no-store, max-age=0, no-cache
+Content-Type: text/html; charset=UTF-8
+Location: http://localhost:8080/index.php/login
+

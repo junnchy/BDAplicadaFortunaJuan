@@ -1,0 +1,1 @@
+__ci_last_regenerate|i:1759607456;beforeLoginUrl|s:48:"http://localhost:8080/index.php/dashboard/ventas";__ci_vars|a:2:{s:14:"beforeLoginUrl";i:1759607633;s:7:"message";s:3:"new";}csrf_test_name|s:32:"2c70e3333afbddcf43fb31822e7e782f";_ci_previous_url|s:37:"http://localhost:8080/index.php/login";user|a:1:{s:2:"id";i:2;}message|s:35:"Bienvenido al Sistema ETL Dashboard";
