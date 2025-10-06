@@ -264,6 +264,43 @@ class DashboardController extends BaseController
                                      ->orderBy('dt.año', 'DESC')
                                      ->findAll();
         
+        // Obtener datos mensuales
+        $monthly_data = $factVentasModel->select('dt.mes, dt.nombre_mes as mes_nombre, SUM(fact_ventas.monto_linea) as total_ventas, COUNT(*) as transacciones, AVG(fact_ventas.monto_linea) as promedio_ventas')
+                                      ->join('dim_tiempo dt', 'fact_ventas.tiempo_sk = dt.tiempo_sk')
+                                      ->groupBy(['dt.mes', 'dt.nombre_mes'])
+                                      ->orderBy('dt.mes')
+                                      ->findAll();
+        
+        // Calcular índice estacional para datos mensuales
+        if (!empty($monthly_data)) {
+            $promedio_general = array_sum(array_column($monthly_data, 'total_ventas')) / count($monthly_data);
+            foreach ($monthly_data as &$month) {
+                $month['indice_estacional'] = $promedio_general > 0 ? $month['total_ventas'] / $promedio_general : 1;
+            }
+        }
+        
+        // Obtener datos trimestrales
+        $quarterly_data = $factVentasModel->select('dt.trimestre, dt.trimestre_nombre as periodo, SUM(fact_ventas.monto_linea) as total_ventas, COUNT(*) as transacciones, SUM(fact_ventas.margen_monto) as margen')
+                                        ->join('dim_tiempo dt', 'fact_ventas.tiempo_sk = dt.tiempo_sk')
+                                        ->groupBy(['dt.trimestre', 'dt.trimestre_nombre'])
+                                        ->orderBy('dt.trimestre')
+                                        ->findAll();
+        
+        // Obtener datos por día de la semana
+        $weekday_data = $factVentasModel->select('dt.dia_semana, dt.nombre_dia as dia_nombre, SUM(fact_ventas.monto_linea) as total_ventas, COUNT(*) as transacciones, AVG(fact_ventas.monto_linea) as promedio_ventas')
+                                      ->join('dim_tiempo dt', 'fact_ventas.tiempo_sk = dt.tiempo_sk')
+                                      ->groupBy(['dt.dia_semana', 'dt.nombre_dia'])
+                                      ->orderBy('dt.dia_semana')
+                                      ->findAll();
+        
+        // Calcular performance por día de la semana
+        if (!empty($weekday_data)) {
+            $max_ventas = max(array_column($weekday_data, 'total_ventas'));
+            foreach ($weekday_data as &$day) {
+                $day['performance'] = $max_ventas > 0 ? ($day['total_ventas'] / $max_ventas) * 100 : 50;
+            }
+        }
+        
         // Calcular estadísticas temporales
         $mejor_mes_data = $factVentasModel->select('dt.nombre_mes, SUM(fact_ventas.monto_linea) as total_ventas')
                                         ->join('dim_tiempo dt', 'fact_ventas.tiempo_sk = dt.tiempo_sk')
@@ -304,6 +341,9 @@ class DashboardController extends BaseController
             'current_year' => $current_year,
             'available_years' => $available_years,
             'yearly_data' => $yearly_data,
+            'monthly_data' => $monthly_data,
+            'quarterly_data' => $quarterly_data,
+            'weekday_data' => $weekday_data,
             'temporal_stats' => $temporal_stats,
             'breadcrumb' => [
                 ['label' => 'Dashboard', 'url' => '/dashboard'],
@@ -377,6 +417,39 @@ class DashboardController extends BaseController
             return $this->response->setJSON([
                 'success' => false,
                 'error' => 'Error al generar gráfico: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * Endpoint AJAX para datos temporales
+     */
+    public function ajaxTemporalData()
+    {
+        if (!auth()->loggedIn()) {
+            return $this->response->setJSON(['error' => 'Unauthorized']);
+        }
+
+        try {
+            $analysisType = $this->request->getPost('analysis_type') ?? 'trends';
+            $metricType = $this->request->getPost('metric_type') ?? 'ventas';
+            $comparison = $this->request->getPost('comparison') ?? 'none';
+            $year = $this->request->getPost('year') ?? $this->getDefaultYear();
+
+            $data = $this->getTemporalAnalysisData($analysisType, $metricType, $year);
+            
+            return $this->response->setJSON([
+                'success' => true,
+                'data' => $data,
+                'analysis_type' => $analysisType,
+                'metric_type' => $metricType
+            ]);
+
+        } catch (\Exception $e) {
+            log_message('error', 'Error en ajaxTemporalData: ' . $e->getMessage());
+            return $this->response->setJSON([
+                'success' => false,
+                'error' => 'Error al cargar datos temporales: ' . $e->getMessage()
             ]);
         }
     }
@@ -791,7 +864,7 @@ class DashboardController extends BaseController
     }
 
     /**
-     * Análisis de márgenes
+     * Obtener análisis de márgenes
      */
     private function getMarginAnalysisData(string $period, string $year): array
     {
@@ -813,6 +886,144 @@ class DashboardController extends BaseController
         $builder->where('dt.año', $year);
         
         return $builder->get()->getResultArray();
+    }
+
+    /**
+     * Obtener datos de análisis temporal para AJAX
+     */
+    private function getTemporalAnalysisData(string $analysisType, string $metricType, string $year): array
+    {
+        $db = \Config\Database::connect();
+        $factVentasModel = new FactVentasModel();
+        
+        switch ($analysisType) {
+            case 'trends':
+                return $this->getYearlyTrendsData($metricType, $year);
+            case 'seasonal':
+                return $this->getSeasonalData($metricType, $year);
+            case 'weekday':
+                return $this->getWeekdayAnalysisData($metricType, $year);
+            case 'monthly':
+                return $this->getMonthlyAnalysisData($metricType, $year);
+            default:
+                return [];
+        }
+    }
+
+    /**
+     * Datos de tendencias anuales
+     */
+    private function getYearlyTrendsData(string $metricType, string $year): array
+    {
+        $db = \Config\Database::connect();
+        $builder = $db->table('fact_ventas fv');
+        
+        $selectFields = ['dt.año as periodo'];
+        switch ($metricType) {
+            case 'ventas':
+                $selectFields[] = 'SUM(fv.monto_linea) as valor';
+                break;
+            case 'transacciones':
+                $selectFields[] = 'COUNT(*) as valor';
+                break;
+            case 'margen':
+                $selectFields[] = 'SUM(fv.margen_monto) as valor';
+                break;
+            case 'ticket_promedio':
+                $selectFields[] = 'AVG(fv.monto_linea) as valor';
+                break;
+        }
+        
+        $builder->select($selectFields);
+        $builder->join('dim_tiempo dt', 'fv.tiempo_sk = dt.tiempo_sk');
+        $builder->groupBy('dt.año');
+        $builder->orderBy('dt.año');
+        
+        if ($year !== 'all') {
+            $builder->where('dt.año', $year);
+        }
+        
+        return $builder->get()->getResultArray();
+    }
+
+    /**
+     * Datos estacionales
+     */
+    private function getSeasonalData(string $metricType, string $year): array
+    {
+        $db = \Config\Database::connect();
+        $builder = $db->table('fact_ventas fv');
+        
+        $selectFields = ['dt.nombre_mes as periodo'];
+        switch ($metricType) {
+            case 'ventas':
+                $selectFields[] = 'SUM(fv.monto_linea) as valor';
+                break;
+            case 'transacciones':
+                $selectFields[] = 'COUNT(*) as valor';
+                break;
+            case 'margen':
+                $selectFields[] = 'SUM(fv.margen_monto) as valor';
+                break;
+            case 'ticket_promedio':
+                $selectFields[] = 'AVG(fv.monto_linea) as valor';
+                break;
+        }
+        
+        $builder->select($selectFields);
+        $builder->join('dim_tiempo dt', 'fv.tiempo_sk = dt.tiempo_sk');
+        $builder->groupBy(['dt.mes', 'dt.nombre_mes']);
+        $builder->orderBy('dt.mes');
+        
+        if ($year !== 'all') {
+            $builder->where('dt.año', $year);
+        }
+        
+        return $builder->get()->getResultArray();
+    }
+
+    /**
+     * Análisis por día de la semana
+     */
+    private function getWeekdayAnalysisData(string $metricType, string $year): array
+    {
+        $db = \Config\Database::connect();
+        $builder = $db->table('fact_ventas fv');
+        
+        $selectFields = ['dt.nombre_dia as periodo'];
+        switch ($metricType) {
+            case 'ventas':
+                $selectFields[] = 'SUM(fv.monto_linea) as valor';
+                break;
+            case 'transacciones':
+                $selectFields[] = 'COUNT(*) as valor';
+                break;
+            case 'margen':
+                $selectFields[] = 'SUM(fv.margen_monto) as valor';
+                break;
+            case 'ticket_promedio':
+                $selectFields[] = 'AVG(fv.monto_linea) as valor';
+                break;
+        }
+        
+        $builder->select($selectFields);
+        $builder->join('dim_tiempo dt', 'fv.tiempo_sk = dt.tiempo_sk');
+        $builder->groupBy(['dt.dia_semana', 'dt.nombre_dia']);
+        $builder->orderBy('dt.dia_semana');
+        
+        if ($year !== 'all') {
+            $builder->where('dt.año', $year);
+        }
+        
+        return $builder->get()->getResultArray();
+    }
+
+    /**
+     * Análisis mensual
+     */
+    private function getMonthlyAnalysisData(string $metricType, string $year): array
+    {
+        return $this->getSeasonalData($metricType, $year);
     }
 
     /**

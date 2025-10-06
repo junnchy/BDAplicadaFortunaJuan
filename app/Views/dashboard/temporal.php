@@ -460,6 +460,28 @@ document.addEventListener('DOMContentLoaded', function() {
     initTemporalCharts();
 });
 
+// Función de utilidad para formatear moneda
+function formatCurrency(value) {
+    return '$' + new Intl.NumberFormat('es-ES', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(value);
+}
+
+// Función de utilidad para mostrar loading
+function showLoading(elementId) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.style.opacity = '0.5';
+    }
+}
+
+// Función de utilidad para mostrar errores
+function showError(message) {
+    console.error(message);
+    // Podrías agregar aquí una notificación visual
+}
+
 function initTemporalCharts() {
     initMainTemporalChart();
     initSeasonalChart();
@@ -471,13 +493,20 @@ function initMainTemporalChart() {
     const ctx = document.getElementById('temporalChart').getContext('2d');
     const yearlyData = <?= json_encode($yearly_data ?? []) ?>;
     
+    console.log('Yearly data:', yearlyData); // Debug
+    
+    if (!yearlyData || yearlyData.length === 0) {
+        ctx.fillText('No hay datos disponibles', 150, 150);
+        return;
+    }
+    
     temporalChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: yearlyData.map(item => item.anio),
+            labels: yearlyData.map(item => item.anio || item.periodo || 'N/A'),
             datasets: [{
                 label: 'Ventas ($)',
-                data: yearlyData.map(item => parseFloat(item.total_ventas)),
+                data: yearlyData.map(item => parseFloat(item.total_ventas || 0)),
                 borderColor: 'rgba(54, 162, 235, 1)',
                 backgroundColor: 'rgba(54, 162, 235, 0.1)',
                 borderWidth: 3,
@@ -511,13 +540,20 @@ function initSeasonalChart() {
     const ctx = document.getElementById('seasonalChart').getContext('2d');
     const monthlyData = <?= json_encode($monthly_data ?? []) ?>;
     
+    console.log('Monthly data:', monthlyData); // Debug
+    
+    if (!monthlyData || monthlyData.length === 0) {
+        ctx.fillText('No hay datos disponibles', 100, 100);
+        return;
+    }
+    
     seasonalChart = new Chart(ctx, {
         type: 'radar',
         data: {
-            labels: monthlyData.map(item => item.mes_nombre.substring(0, 3)),
+            labels: monthlyData.map(item => (item.mes_nombre || item.nombre_mes || 'N/A').substring(0, 3)),
             datasets: [{
                 label: 'Índice Estacional',
-                data: monthlyData.map(item => parseFloat(item.indice_estacional ?? 1)),
+                data: monthlyData.map(item => parseFloat(item.indice_estacional || 1)),
                 borderColor: 'rgba(255, 99, 132, 1)',
                 backgroundColor: 'rgba(255, 99, 132, 0.2)',
                 borderWidth: 2
@@ -540,13 +576,20 @@ function initWeekdayChart() {
     const ctx = document.getElementById('weekdayChart').getContext('2d');
     const weekdayData = <?= json_encode($weekday_data ?? []) ?>;
     
+    console.log('Weekday data:', weekdayData); // Debug
+    
+    if (!weekdayData || weekdayData.length === 0) {
+        ctx.fillText('No hay datos disponibles', 100, 100);
+        return;
+    }
+    
     weekdayChart = new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: weekdayData.map(item => item.dia_nombre),
+            labels: weekdayData.map(item => item.dia_nombre || item.nombre_dia || 'N/A'),
             datasets: [{
                 label: 'Ventas Promedio ($)',
-                data: weekdayData.map(item => parseFloat(item.promedio_ventas)),
+                data: weekdayData.map(item => parseFloat(item.promedio_ventas || item.total_ventas || 0)),
                 backgroundColor: [
                     'rgba(255, 99, 132, 0.6)',
                     'rgba(54, 162, 235, 0.6)',
@@ -585,13 +628,20 @@ function initMonthlyChart() {
     const ctx = document.getElementById('monthlyChart').getContext('2d');
     const monthlyData = <?= json_encode($monthly_data ?? []) ?>;
     
+    console.log('Monthly data for chart:', monthlyData); // Debug
+    
+    if (!monthlyData || monthlyData.length === 0) {
+        ctx.fillText('No hay datos disponibles', 100, 100);
+        return;
+    }
+    
     monthlyChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: monthlyData.map(item => item.mes_nombre),
+            labels: monthlyData.map(item => item.mes_nombre || item.nombre_mes || 'N/A'),
             datasets: [{
                 label: 'Ventas ($)',
-                data: monthlyData.map(item => parseFloat(item.total_ventas)),
+                data: monthlyData.map(item => parseFloat(item.total_ventas || 0)),
                 borderColor: 'rgba(75, 192, 192, 1)',
                 backgroundColor: 'rgba(75, 192, 192, 0.2)',
                 borderWidth: 2,

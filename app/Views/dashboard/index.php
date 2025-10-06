@@ -116,7 +116,8 @@
                         <label for="yearSelect" class="form-label">Año:</label>
                                                 <select class="form-select" id="yearSelect">
                             <option value="2023">2023</option>
-                            <option value="2024" selected>2024</option>
+                            <option value="2024">2024</option>
+                            <option value="2025" selected>2025</option>
                         </select>
                     </div>
                     <div class="col-md-3">
@@ -622,9 +623,7 @@ function formatCurrency(value) {
     if (typeof value !== 'number') {
         value = parseFloat(value) || 0;
     }
-    return new Intl.NumberFormat('es-AR', {
-        style: 'currency',
-        currency: 'ARS',
+    return '$' + new Intl.NumberFormat('es-ES', {
         minimumFractionDigits: 0,
         maximumFractionDigits: 0
     }).format(value);

@@ -295,9 +295,9 @@
         
         // Utilidades globales
         function formatCurrency(amount) {
-            return new Intl.NumberFormat('es-ES', {
-                style: 'currency',
-                currency: 'USD'
+            return '$' + new Intl.NumberFormat('es-ES', {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
             }).format(amount);
         }
 
