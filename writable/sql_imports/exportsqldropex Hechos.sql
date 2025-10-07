@@ -25,6 +25,6 @@ INNER JOIN productos p
     ON p.idproducto = l.idproducto
 INNER JOIN clientes c 
     ON c.codcliente = f.codcliente
-WHERE f.fecha > '2025-09-20'
+WHERE f.fecha > '2025-01-01'
   AND (l.pvpunitario - l.costounitario) > 0 AND p.idproducto NOT IN (6632,5818)
 ORDER BY f.fecha ASC;

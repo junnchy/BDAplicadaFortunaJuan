@@ -15,6 +15,6 @@ WHERE c.codcliente IN (
     SELECT DISTINCT f.codcliente
     FROM facturascli f
     WHERE f.margen > 0
-      AND f.fecha > '2025-09-20'
+      AND f.fecha > '2025-01-01'
 )
 ORDER BY c.codcliente;

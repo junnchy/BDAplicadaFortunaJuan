@@ -239,6 +239,484 @@ class DashboardController extends BaseController
     }
 
     /**
+     * Vista de análisis de clientes
+     */
+    public function clientes()
+    {
+        if (!auth()->loggedIn()) {
+            return redirect()->to('/login');
+        }
+
+        log_message('debug', 'DashboardController::clientes() method called');
+        echo "<!-- DEBUG: Método clientes() ejecutándose -->\n"; // DEBUG TEMPORAL
+        
+        try {
+            $factVentasModel = new FactVentasModel();
+            $dimTiempoModel = new DimTiempoModel();
+            $db = \Config\Database::connect();
+            
+            // Obtener años disponibles
+            $available_years = $dimTiempoModel->distinct()->select('año')->orderBy('año', 'DESC')->findAll();
+            $available_years = array_column($available_years, 'año');
+            $current_year = date('Y');
+            
+            // Obtener datos de clientes con información de ventas usando datos reales de dim_cliente
+            $client_data_query = "
+                SELECT 
+                    dc.cliente_sk,
+                    dc.cliente_nombre,
+                    dc.segmento,
+                    dc.email,
+                    dc.ciudad,
+                    dc.pais,
+                    dc.activo,
+                    dc.fecha_primera_compra,
+                    dc.fecha_ultima_compra,
+                    COALESCE(SUM(fv.monto_linea), 0) as total_ventas,
+                    COALESCE(SUM(fv.margen_monto), 0) as total_margen,
+                    COALESCE(COUNT(fv.venta_sk), 0) as transacciones,
+                    COALESCE(AVG(fv.monto_linea), 0) as ticket_promedio,
+                    COALESCE(AVG(fv.margen_monto), 0) as margen_promedio,
+                    COALESCE(COUNT(DISTINCT fv.tiempo_sk), 0) as dias_activos,
+                    COALESCE(COUNT(DISTINCT fv.orden_id), 0) as ordenes_unicas,
+                    MAX(dt.fecha_natural) as ultima_compra
+                FROM dim_cliente dc
+                LEFT JOIN fact_ventas fv ON dc.cliente_sk = fv.cliente_sk
+                LEFT JOIN dim_tiempo dt ON fv.tiempo_sk = dt.tiempo_sk
+                WHERE dc.es_actual = 1
+                GROUP BY dc.cliente_sk, dc.cliente_nombre, dc.segmento, dc.email, dc.ciudad, dc.pais, dc.activo
+                HAVING total_ventas > 0
+                ORDER BY total_ventas DESC
+                LIMIT 300
+            ";
+            
+            $client_data_raw = $db->query($client_data_query)->getResultArray();
+            
+            // Procesar datos de clientes
+            $client_data = [];
+            foreach ($client_data_raw as $row) {
+                $total_ventas = floatval($row['total_ventas']);
+                $total_margen = floatval($row['total_margen']);
+                $transacciones = intval($row['transacciones']);
+                
+                $client_data[] = [
+                    'cliente_sk' => $row['cliente_sk'],
+                    'cliente_nombre' => $row['cliente_nombre'] ?: 'Cliente ' . $row['cliente_sk'],
+                    'segmento' => $row['segmento'] ?: 'Sin Segmento',
+                    'email' => $row['email'] ?: '',
+                    'ciudad' => $row['ciudad'] ?: '',
+                    'pais' => $row['pais'] ?: '',
+                    'activo' => $row['activo'],
+                    'total_ventas' => $total_ventas,
+                    'total_margen' => $total_margen,
+                    'margen_porcentaje' => $total_ventas > 0 ? ($total_margen / $total_ventas) * 100 : 0,
+                    'transacciones' => $transacciones,
+                    'ordenes_unicas' => intval($row['ordenes_unicas']),
+                    'ticket_promedio' => floatval($row['ticket_promedio']),
+                    'margen_promedio' => floatval($row['margen_promedio']),
+                    'dias_activos' => intval($row['dias_activos']),
+                    'ultima_compra' => $row['ultima_compra'] ?: 'N/A',
+                    'frecuencia_compra' => $transacciones / max(1, intval($row['dias_activos'])),
+                    'items_por_orden' => intval($row['ordenes_unicas']) > 0 ? $transacciones / intval($row['ordenes_unicas']) : 0
+                ];
+            }
+            
+            // Estadísticas generales
+            $stats_query = "
+                SELECT 
+                    COUNT(DISTINCT dc.cliente_sk) as total_clients,
+                    COUNT(DISTINCT CASE WHEN dc.activo = 1 THEN dc.cliente_sk END) as active_clients,
+                    COALESCE(SUM(fv.monto_linea), 0) as total_sales,
+                    COALESCE(SUM(fv.margen_monto), 0) as total_margin,
+                    COALESCE(AVG(fv.monto_linea), 0) as avg_ticket,
+                    COALESCE(AVG(fv.margen_monto), 0) as avg_margin
+                FROM dim_cliente dc
+                LEFT JOIN fact_ventas fv ON dc.cliente_sk = fv.cliente_sk
+                WHERE dc.es_actual = 1
+            ";
+            
+            $stats_result = $db->query($stats_query)->getRowArray();
+            
+            // Análisis de segmentación por margen
+            $margin_analysis = [];
+            if (!empty($client_data)) {
+                $margins = array_column($client_data, 'margen_porcentaje');
+                sort($margins);
+                $count = count($margins);
+                
+                $q25 = $margins[intval($count * 0.25)];
+                $q50 = $margins[intval($count * 0.50)];
+                $q75 = $margins[intval($count * 0.75)];
+                
+                foreach ($client_data as $cliente) {
+                    $margen = $cliente['margen_porcentaje'];
+                    $segment = '';
+                    
+                    if ($margen >= $q75) {
+                        $segment = 'Alto Margen';
+                    } elseif ($margen >= $q50) {
+                        $segment = 'Margen Medio-Alto';
+                    } elseif ($margen >= $q25) {
+                        $segment = 'Margen Medio-Bajo';
+                    } else {
+                        $segment = 'Bajo Margen';
+                    }
+                    
+                    if (!isset($margin_analysis[$segment])) {
+                        $margin_analysis[$segment] = ['count' => 0, 'total_margin' => 0];
+                    }
+                    $margin_analysis[$segment]['count']++;
+                    $margin_analysis[$segment]['total_margin'] += $cliente['total_margen'];
+                }
+            }
+            
+            // Análisis de frecuencia de operaciones CON DETALLES DE CLIENTES
+            $frequency_analysis = [];
+            $frequency_details = []; // Nueva variable para almacenar detalles por segmento
+            if (!empty($client_data)) {
+                foreach ($client_data as $cliente) {
+                    $transacciones = $cliente['transacciones'];
+                    $segment = '';
+                    
+                    if ($transacciones >= 50) {
+                        $segment = 'Muy Activo (50+ ops)';
+                    } elseif ($transacciones >= 20) {
+                        $segment = 'Activo (20-49 ops)';
+                    } elseif ($transacciones >= 5) {
+                        $segment = 'Moderado (5-19 ops)';
+                    } else {
+                        $segment = 'Poco Activo (1-4 ops)';
+                    }
+                    
+                    if (!isset($frequency_analysis[$segment])) {
+                        $frequency_analysis[$segment] = ['count' => 0, 'total_transactions' => 0];
+                        $frequency_details[$segment] = [];
+                    }
+                    $frequency_analysis[$segment]['count']++;
+                    $frequency_analysis[$segment]['total_transactions'] += $transacciones;
+                    
+                    // Guardar detalles del cliente para este segmento
+                    $frequency_details[$segment][] = [
+                        'cliente_sk' => $cliente['cliente_sk'],
+                        'cliente_nombre' => $cliente['cliente_nombre'],
+                        'segmento' => $cliente['segmento'],
+                        'transacciones' => $transacciones,
+                        'total_ventas' => $cliente['total_ventas'],
+                        'total_margen' => $cliente['total_margen'],
+                        'ultima_compra' => $cliente['ultima_compra']
+                    ];
+                }
+            }
+            
+            // Análisis de clientes "CAÍDOS" (sin compras en +10 días) - VERSIÓN FINAL
+            $clientes_caidos = [];
+            $caidos_stats = [
+                'total_caidos' => 0,
+                'ventas_perdidas_potencial' => 0,
+                'promedio_dias_sin_compra' => 0
+            ];
+            
+            try {
+                $caidos_query = "
+                    WITH clientes_con_ultima_compra AS (
+                        SELECT 
+                            dc.cliente_sk,
+                            dc.cliente_nombre,
+                            dc.segmento,
+                            dc.email,
+                            MAX(dt.fecha_natural) as ultima_compra,
+                            COUNT(fv.venta_sk) as total_compras_historicas,
+                            SUM(fv.monto_linea) as total_ventas_historicas
+                        FROM dim_cliente dc
+                        INNER JOIN fact_ventas fv ON dc.cliente_sk = fv.cliente_sk
+                        INNER JOIN dim_tiempo dt ON fv.tiempo_sk = dt.tiempo_sk
+                        WHERE dc.es_actual = 1
+                        GROUP BY dc.cliente_sk, dc.cliente_nombre, dc.segmento, dc.email
+                    )
+                    SELECT 
+                        cliente_sk,
+                        cliente_nombre,
+                        COALESCE(segmento, 'Sin Segmento') as segmento,
+                        COALESCE(email, '') as email,
+                        ultima_compra,
+                        total_compras_historicas,
+                        total_ventas_historicas,
+                        julianday('now') - julianday(ultima_compra) as dias_sin_compra
+                    FROM clientes_con_ultima_compra
+                    WHERE julianday('now') - julianday(ultima_compra) > 10 
+                        AND total_compras_historicas > 0
+                    ORDER BY total_ventas_historicas DESC
+                    LIMIT 100
+                ";
+                
+                $caidos_result = $db->query($caidos_query)->getResultArray();
+                
+                if (!empty($caidos_result)) {
+                    $total_dias = 0;
+                    foreach ($caidos_result as $caido) {
+                        $dias_sin_compra = intval($caido['dias_sin_compra']);
+                        $ventas_historicas = floatval($caido['total_ventas_historicas']);
+                        
+                        $clientes_caidos[] = [
+                            'cliente_sk' => $caido['cliente_sk'],
+                            'cliente_nombre' => $caido['cliente_nombre'],
+                            'segmento' => $caido['segmento'],
+                            'email' => $caido['email'],
+                            'ultima_compra' => $caido['ultima_compra'],
+                            'dias_sin_compra' => $dias_sin_compra,
+                            'total_compras_historicas' => intval($caido['total_compras_historicas']),
+                            'total_ventas_historicas' => $ventas_historicas,
+                            'categoria_caido' => $dias_sin_compra > 60 ? 'Crítico' : ($dias_sin_compra > 30 ? 'Alto Riesgo' : 'Moderado')
+                        ];
+                        
+                        $total_dias += $dias_sin_compra;
+                        $caidos_stats['ventas_perdidas_potencial'] += $ventas_historicas;
+                    }
+                    
+                    $caidos_stats['total_caidos'] = count($clientes_caidos);
+                    $caidos_stats['promedio_dias_sin_compra'] = $caidos_stats['total_caidos'] > 0 ? 
+                        intval($total_dias / $caidos_stats['total_caidos']) : 0;
+                }
+            } catch (\Exception $e) {
+                log_message('error', 'Error en consulta de clientes caídos: ' . $e->getMessage());
+                // Los arrays ya están inicializados con valores por defecto
+            }
+            
+            // Segmentación por valor (usando datos reales)
+            $segment_query = "
+                SELECT 
+                    COALESCE(dc.segmento, 'Sin Segmento') as segmento,
+                    COUNT(DISTINCT dc.cliente_sk) as count,
+                    COALESCE(SUM(fv.monto_linea), 0) as sales
+                FROM dim_cliente dc
+                LEFT JOIN fact_ventas fv ON dc.cliente_sk = fv.cliente_sk
+                WHERE dc.es_actual = 1
+                GROUP BY dc.segmento
+                ORDER BY count DESC
+            ";
+            
+            $segments_result = $db->query($segment_query)->getResultArray();
+            
+            $client_segments = [];
+            $colors = ['#007bff', '#28a745', '#ffc107', '#dc3545', '#6f42c1', '#fd7e14', '#20c997', '#6c757d', '#17a2b8', '#f8f9fa'];
+            $color_index = 0;
+            
+            foreach ($segments_result as $segment) {
+                $client_segments[$segment['segmento']] = [
+                    'count' => intval($segment['count']),
+                    'sales' => floatval($segment['sales']),
+                    'color' => $colors[$color_index % count($colors)]
+                ];
+                $color_index++;
+            }
+            
+            // Análisis de recencia basado en última compra
+            $recency_query = "
+                SELECT 
+                    CASE 
+                        WHEN dc.fecha_ultima_compra IS NULL THEN 'Sin Compras'
+                        WHEN julianday('now') - julianday(dc.fecha_ultima_compra) <= 30 THEN 'Activos (< 30 días)'
+                        WHEN julianday('now') - julianday(dc.fecha_ultima_compra) <= 90 THEN 'Recientes (30-90 días)'
+                        WHEN julianday('now') - julianday(dc.fecha_ultima_compra) <= 180 THEN 'En Riesgo (90-180 días)'
+                        ELSE 'Inactivos (> 180 días)'
+                    END as recency_segment,
+                    COUNT(*) as count,
+                    COALESCE(SUM(fv.monto_linea), 0) as sales
+                FROM dim_cliente dc
+                LEFT JOIN fact_ventas fv ON dc.cliente_sk = fv.cliente_sk
+                WHERE dc.es_actual = 1
+                GROUP BY recency_segment
+                ORDER BY 
+                    CASE recency_segment
+                        WHEN 'Activos (< 30 días)' THEN 1
+                        WHEN 'Recientes (30-90 días)' THEN 2
+                        WHEN 'En Riesgo (90-180 días)' THEN 3
+                        WHEN 'Inactivos (> 180 días)' THEN 4
+                        ELSE 5
+                    END
+            ";
+            
+            $recency_result = $db->query($recency_query)->getResultArray();
+            
+            $recency_analysis = [];
+            foreach ($recency_result as $recency) {
+                $recency_analysis[$recency['recency_segment']] = [
+                    'count' => intval($recency['count']),
+                    'sales' => floatval($recency['sales'])
+                ];
+            }
+            
+            // Distribución geográfica
+            $geo_query = "
+                SELECT 
+                    COALESCE(NULLIF(dc.pais, ''), 'Sin Datos') as pais,
+                    COUNT(*) as count
+                FROM dim_cliente dc
+                WHERE dc.es_actual = 1
+                GROUP BY dc.pais
+                ORDER BY count DESC
+                LIMIT 10
+            ";
+            
+            $geo_result = $db->query($geo_query)->getResultArray();
+            
+            $geographic_distribution = [];
+            foreach ($geo_result as $geo) {
+                $geographic_distribution[$geo['pais']] = intval($geo['count']);
+            }
+            
+            $data = [
+                'title' => 'Análisis de Clientes - Dashboard',
+                'user' => auth()->user(),
+                'available_years' => $available_years,
+                'current_year' => $current_year,
+                'client_data' => $client_data,
+                'client_segments' => $client_segments,
+                'margin_analysis' => $margin_analysis,
+                'frequency_analysis' => $frequency_analysis,
+                'frequency_details' => $frequency_details, // Nuevos detalles para interactividad
+                'clientes_caidos' => $clientes_caidos, // Nuevos clientes caídos
+                'caidos_stats' => $caidos_stats, // Estadísticas de clientes caídos
+                'stats' => [
+                    'total_clients' => intval($stats_result['total_clients']),
+                    'active_clients' => intval($stats_result['active_clients']),
+                    'total_sales' => floatval($stats_result['total_sales']),
+                    'total_margin' => floatval($stats_result['total_margin']),
+                    'avg_ticket' => floatval($stats_result['avg_ticket']),
+                    'avg_margin' => floatval($stats_result['avg_margin']),
+                    'margin_percentage' => floatval($stats_result['total_sales']) > 0 ? 
+                        (floatval($stats_result['total_margin']) / floatval($stats_result['total_sales'])) * 100 : 0
+                ]
+            ];
+
+            log_message('debug', 'DashboardController::clientes() returning view with real data');
+            return view('dashboard/clientes', $data);
+            
+        } catch (\Exception $e) {
+            log_message('error', 'Error in DashboardController::clientes(): ' . $e->getMessage());
+            log_message('error', 'Stack trace: ' . $e->getTraceAsString());
+            
+            return view('errors/generic', [
+                'message' => 'Error al cargar datos de clientes: ' . $e->getMessage() . ' (Línea: ' . $e->getLine() . ')'
+            ]);
+        }
+    }
+
+    /**
+     * Función AJAX para filtrar clientes
+     */
+    public function clientesFilter()
+    {
+        if (!auth()->loggedIn()) {
+            return $this->response->setJSON(['error' => 'No autorizado']);
+        }
+
+        $request = service('request');
+        $metrica = $request->getPost('metrica') ?? 'ventas';
+        $segmento = $request->getPost('segmento') ?? 'all';
+        $topCount = intval($request->getPost('topCount') ?? 50);
+        
+        try {
+            $db = \Config\Database::connect();
+            
+            // Construir la consulta según los filtros
+            $whereClause = "WHERE dc.es_actual = 1";
+            
+            if ($segmento !== 'all') {
+                $whereClause .= " AND LOWER(dc.segmento) = '" . strtolower($segmento) . "'";
+            }
+            
+            // Definir el orden según la métrica
+            $orderBy = "total_ventas DESC";
+            switch ($metrica) {
+                case 'margen':
+                    $orderBy = "total_margen DESC";
+                    break;
+                case 'transacciones':
+                    $orderBy = "transacciones DESC";
+                    break;
+                case 'ticket_promedio':
+                    $orderBy = "ticket_promedio DESC";
+                    break;
+                default:
+                    $orderBy = "total_ventas DESC";
+                    break;
+            }
+            
+            $client_data_query = "
+                SELECT 
+                    dc.cliente_sk,
+                    dc.cliente_nombre,
+                    dc.segmento,
+                    dc.email,
+                    COALESCE(SUM(fv.monto_linea), 0) as total_ventas,
+                    COALESCE(SUM(fv.margen_monto), 0) as total_margen,
+                    COALESCE(COUNT(fv.venta_sk), 0) as transacciones,
+                    COALESCE(AVG(fv.monto_linea), 0) as ticket_promedio,
+                    COALESCE(COUNT(DISTINCT fv.orden_id), 0) as ordenes_unicas,
+                    MAX(dt.fecha_natural) as ultima_compra
+                FROM dim_cliente dc
+                LEFT JOIN fact_ventas fv ON dc.cliente_sk = fv.cliente_sk
+                LEFT JOIN dim_tiempo dt ON fv.tiempo_sk = dt.tiempo_sk
+                {$whereClause}
+                GROUP BY dc.cliente_sk, dc.cliente_nombre, dc.segmento, dc.email
+                HAVING total_ventas > 0
+                ORDER BY {$orderBy}
+                LIMIT {$topCount}
+            ";
+            
+            $client_data_raw = $db->query($client_data_query)->getResultArray();
+            
+            // Procesar datos para el gráfico
+            $chart_data = [];
+            foreach ($client_data_raw as $row) {
+                $value = 0;
+                switch ($metrica) {
+                    case 'margen':
+                        $value = floatval($row['total_margen']);
+                        break;
+                    case 'transacciones':
+                        $value = intval($row['transacciones']);
+                        break;
+                    case 'ticket_promedio':
+                        $value = floatval($row['ticket_promedio']);
+                        break;
+                    default:
+                        $value = floatval($row['total_ventas']);
+                        break;
+                }
+                
+                $chart_data[] = [
+                    'cliente_sk' => $row['cliente_sk'],
+                    'cliente_nombre' => $row['cliente_nombre'] ?: 'Cliente ' . $row['cliente_sk'],
+                    'segmento' => $row['segmento'] ?: 'Sin Segmento',
+                    'value' => $value,
+                    'total_ventas' => floatval($row['total_ventas']),
+                    'total_margen' => floatval($row['total_margen']),
+                    'transacciones' => intval($row['transacciones']),
+                    'ordenes_unicas' => intval($row['ordenes_unicas']),
+                    'ticket_promedio' => floatval($row['ticket_promedio']),
+                    'ultima_compra' => $row['ultima_compra'] ?: 'N/A'
+                ];
+            }
+            
+            return $this->response->setJSON([
+                'success' => true,
+                'data' => $chart_data,
+                'metrica' => $metrica,
+                'segmento' => $segmento,
+                'total_count' => count($chart_data)
+            ]);
+            
+        } catch (\Exception $e) {
+            log_message('error', 'Error in clientesFilter: ' . $e->getMessage());
+            return $this->response->setJSON([
+                'error' => 'Error al filtrar datos: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
      * Vista de análisis temporal
      */
     public function temporal()
@@ -450,6 +928,102 @@ class DashboardController extends BaseController
             return $this->response->setJSON([
                 'success' => false,
                 'error' => 'Error al cargar datos temporales: ' . $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * AJAX endpoint para datos de clientes dinámicos
+     */
+    public function ajaxClientesData()
+    {
+        if (!auth()->loggedIn()) {
+            return $this->response->setJSON(['error' => 'Unauthorized']);
+        }
+
+        try {
+            $segment = $this->request->getPost('segment') ?? 'all';
+            $limit = intval($this->request->getPost('limit') ?? 50);
+            $orderBy = $this->request->getPost('orderBy') ?? 'total_ventas';
+            $orderDir = $this->request->getPost('orderDir') ?? 'DESC';
+
+            $factVentasModel = new FactVentasModel();
+            
+            // Query base para datos de clientes
+            $query = $factVentasModel->select('
+                cliente_sk, 
+                SUM(monto_linea) as total_ventas, 
+                SUM(cantidad) as cantidad_total, 
+                SUM(margen_monto) as margen_total, 
+                COUNT(*) as transacciones, 
+                AVG(monto_linea) as ticket_promedio,
+                COUNT(DISTINCT tiempo_sk) as dias_activos,
+                MAX(tiempo_sk) as ultima_compra_sk
+            ')
+            ->groupBy('cliente_sk');
+
+            // Aplicar filtro de segmento si no es 'all'
+            if ($segment !== 'all') {
+                // Aquí podrías agregar lógica de filtrado por segmento
+                // Por ejemplo, filtrar por rangos de ventas
+            }
+
+            $client_data_raw = $query->orderBy($orderBy, $orderDir)
+                                   ->limit($limit)
+                                   ->findAll();
+
+            // Obtener nombres de clientes
+            if (!empty($client_data_raw)) {
+                $cliente_sks = array_column($client_data_raw, 'cliente_sk');
+                $db = \Config\Database::connect();
+                
+                $placeholders = str_repeat('?,', count($cliente_sks) - 1) . '?';
+                $names_query = $db->query("SELECT cliente_sk, nombre, apellido, email FROM dim_cliente WHERE cliente_sk IN ($placeholders)", $cliente_sks);
+                $names_result = $names_query->getResultArray();
+                
+                $client_names = [];
+                foreach ($names_result as $name_row) {
+                    $display_name = '';
+                    if (!empty($name_row['nombre']) && !empty($name_row['apellido'])) {
+                        $display_name = trim($name_row['nombre']) . ' ' . trim($name_row['apellido']);
+                    } elseif (!empty($name_row['nombre'])) {
+                        $display_name = trim($name_row['nombre']);
+                    } elseif (!empty($name_row['email'])) {
+                        $display_name = trim($name_row['email']);
+                    } else {
+                        $display_name = 'Cliente ' . $name_row['cliente_sk'];
+                    }
+                    $client_names[$name_row['cliente_sk']] = $display_name;
+                }
+
+                // Combinar datos
+                $client_data = [];
+                foreach ($client_data_raw as $row) {
+                    $client_data[] = [
+                        'cliente_sk' => $row['cliente_sk'],
+                        'cliente_nombre' => $client_names[$row['cliente_sk']] ?? 'Cliente ' . $row['cliente_sk'],
+                        'total_ventas' => floatval($row['total_ventas']),
+                        'transacciones' => intval($row['transacciones']),
+                        'ticket_promedio' => floatval($row['ticket_promedio']),
+                        'dias_activos' => intval($row['dias_activos']),
+                        'frecuencia_compra' => intval($row['transacciones']) / max(1, intval($row['dias_activos']))
+                    ];
+                }
+            } else {
+                $client_data = [];
+            }
+
+            return $this->response->setJSON([
+                'success' => true,
+                'data' => $client_data,
+                'total_records' => count($client_data)
+            ]);
+
+        } catch (\Exception $e) {
+            log_message('error', 'Error en ajaxClientesData: ' . $e->getMessage());
+            return $this->response->setJSON([
+                'success' => false,
+                'error' => 'Error al cargar datos de clientes: ' . $e->getMessage()
             ]);
         }
     }
@@ -1109,5 +1683,104 @@ class DashboardController extends BaseController
         
         // Fallback al año actual si no hay datos
         return date('Y');
+    }
+
+    /**
+     * Segmenta clientes por valor (RFM simplificado)
+     */
+    private function segmentClients(array $clientData): array
+    {
+        if (empty($clientData)) {
+            return [];
+        }
+        
+        // Calcular quartiles para segmentación
+        $values = array_column($clientData, 'total_ventas');
+        sort($values);
+        $count = count($values);
+        
+        $q1 = $values[intval($count * 0.25)];
+        $q2 = $values[intval($count * 0.50)];
+        $q3 = $values[intval($count * 0.75)];
+        
+        $segments = [
+            'VIP' => ['count' => 0, 'sales' => 0],
+            'Alto Valor' => ['count' => 0, 'sales' => 0],
+            'Medio' => ['count' => 0, 'sales' => 0],
+            'Bajo Valor' => ['count' => 0, 'sales' => 0]
+        ];
+        
+        foreach ($clientData as $client) {
+            $value = $client['total_ventas'];
+            $segment = '';
+            
+            if ($value >= $q3) {
+                $segment = 'VIP';
+            } elseif ($value >= $q2) {
+                $segment = 'Alto Valor';
+            } elseif ($value >= $q1) {
+                $segment = 'Medio';
+            } else {
+                $segment = 'Bajo Valor';
+            }
+            
+            $segments[$segment]['count']++;
+            $segments[$segment]['sales'] += $value;
+        }
+        
+        return $segments;
+    }
+
+    /**
+     * Análisis de recencia de clientes
+     */
+    private function getClientRecencyAnalysis(): array
+    {
+        $db = \Config\Database::connect();
+        
+        // Obtener última compra por cliente
+        $query = $db->query("
+            SELECT 
+                cliente_sk,
+                MAX(dt.fecha_natural) as ultima_compra,
+                julianday('now') - julianday(MAX(dt.fecha_natural)) as dias_sin_compra,
+                COUNT(*) as total_compras,
+                SUM(monto_linea) as total_gastado
+            FROM fact_ventas fv 
+            JOIN dim_tiempo dt ON fv.tiempo_sk = dt.tiempo_sk 
+            GROUP BY cliente_sk 
+            ORDER BY dias_sin_compra ASC
+        ");
+        
+        $recency_data = $query->getResultArray();
+        
+        // Segmentar por recencia
+        $segments = [
+            'Activos (< 30 días)' => ['count' => 0, 'sales' => 0],
+            'Recientes (30-90 días)' => ['count' => 0, 'sales' => 0],
+            'En Riesgo (90-180 días)' => ['count' => 0, 'sales' => 0],
+            'Inactivos (> 180 días)' => ['count' => 0, 'sales' => 0]
+        ];
+        
+        foreach ($recency_data as $client) {
+            $days = intval($client['dias_sin_compra']);
+            $sales = floatval($client['total_gastado']);
+            
+            if ($days < 30) {
+                $segments['Activos (< 30 días)']['count']++;
+                $segments['Activos (< 30 días)']['sales'] += $sales;
+            } elseif ($days < 90) {
+                $segments['Recientes (30-90 días)']['count']++;
+                $segments['Recientes (30-90 días)']['sales'] += $sales;
+            } elseif ($days < 180) {
+                $segments['En Riesgo (90-180 días)']['count']++;
+                $segments['En Riesgo (90-180 días)']['sales'] += $sales;
+            } else {
+                $segments['Inactivos (> 180 días)']['count']++;
+                $segments['Inactivos (> 180 días)']['sales'] += $sales;
+            }
+        }
+        
+        return $segments;
     }
 }

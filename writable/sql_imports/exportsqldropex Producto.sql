@@ -28,7 +28,7 @@ INNER JOIN productos p ON p.idproducto = l.idproducto
 INNER JOIN clientes c ON c.codcliente = f.codcliente
 INNER JOIN familias fa ON fa.codfamilia = p.codfamilia
 WHERE f.margen > 0 
-  AND f.fecha > '2025-09-20'
+  AND f.fecha > '2025-01-01'
   AND p.idproducto NOT IN (6632,5818)  
 GROUP BY 
   p.idproducto,

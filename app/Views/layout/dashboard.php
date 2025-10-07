@@ -225,6 +225,12 @@
                             </a>
                         </li>
                         <li class="nav-item">
+                            <a class="nav-link <?= strpos(current_url(), 'dashboard/clientes') !== false ? 'active' : '' ?>" href="/dashboard/clientes">
+                                <i class="fas fa-users me-2"></i>
+                                Análisis de Clientes
+                            </a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link <?= strpos(current_url(), 'dashboard/temporal') !== false ? 'active' : '' ?>" href="/dashboard/temporal">
                                 <i class="fas fa-calendar-alt me-2"></i>
                                 Análisis Temporal

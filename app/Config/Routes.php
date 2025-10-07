@@ -21,12 +21,15 @@ $routes->group('dashboard', ['filter' => 'session'], static function ($routes) {
     $routes->get('/', 'DashboardController::index');
     $routes->get('ventas', 'DashboardController::ventas');
     $routes->get('productos', 'DashboardController::productos');
+    $routes->get('clientes', 'DashboardController::clientes');
     $routes->get('temporal', 'DashboardController::temporal');
     
     // AJAX endpoints para dashboard
     $routes->post('ajaxChartData', 'DashboardController::ajaxChartData');
     $routes->post('ajaxTemporalData', 'DashboardController::ajaxTemporalData');
+    $routes->post('ajaxClientesData', 'DashboardController::ajaxClientesData');
     $routes->post('ajaxDrillDown', 'DashboardController::ajaxDrillDown');
+    $routes->post('clientesFilter', 'DashboardController::clientesFilter');
     
     // Administrador de Base de Datos
     $routes->group('admin', static function ($routes) {
